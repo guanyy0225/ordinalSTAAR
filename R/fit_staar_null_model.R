@@ -1,14 +1,23 @@
 #' Fit STAAR Null Model
 #'
-#' This function fits a simplified null model for STAAR, either an ordinal clm
-#' model or a generalized linear model depending on the family specified.
+#' This function fits a simplified null model for STAAR analysis. Depending on the
+#' specified family, it fits either:
+#' \itemize{
+#'   \item an ordinal cumulative link model (clm) when family = "ordinal", or
+#'   \item a generalized linear model (glm) for other families such as binomial or gaussian.
+#' }
+#' 
+#' For ordinal models, predicted probabilities and weights are calculated manually,
+#' and a pseudo-GLM object is assembled for compatibility with downstream STAAR functions.
 #'
-#' @param fixed Formula specifying the model equation.
-#' @param data Data frame containing the model variables.
-#' @param family Family of the model. For ordinal models, use "ordinal".
-#' @param ... Additional arguments passed to the fitting functions.
+#' @param fixed A formula specifying the model equation.
+#' @param data A data frame containing variables in the model.
+#' @param family Either "ordinal" (character) for ordinal cumulative link models,
+#'   or a family object (e.g. binomial, gaussian) for GLMs. Default is binomial(logit).
+#' @param ... Additional arguments passed to the underlying fitting functions (clm or glm).
 #'
-#' @return An object suitable for use in STAAR analysis.
+#' @return An object of class "glm" (or a pseudo-GLM object) containing the fitted null model,
+#'   suitable for use in STAAR analysis pipelines.
 #'
 fit_staar_null_model <- function(fixed, data, family = binomial(link = "logit"), ...) {
   
@@ -24,20 +33,9 @@ fit_staar_null_model <- function(fixed, data, family = binomial(link = "logit"),
   return(obj_nullmodel)
 }
 
-#' Fit STAAR CLM for STAAR
-#'
-#' This function fits an ordinal clm model specifically for STAAR analysis,
-#' calculates predicted probabilities, and assembles the necessary components.
-#'
-#' @param fixed Formula specifying the model equation.
-#' @param data Data frame containing the model variables.
-#' @param ... Additional arguments passed to the clm function.
-#'
-#' @return An object containing the fitted model components for STAAR.
-#'
+
 fit_clm_for_staar <- function(fixed, data, ...) {
   
-  # --- Step 1: Fit ordinal clm model ---
   message("Step 1/3: Fitting ordinal clm null model...")
   clm_fit <- tryCatch({
     ordinal::clm(formula = fixed, data = data, model = TRUE, Hess = TRUE, ...)
@@ -46,16 +44,13 @@ fit_clm_for_staar <- function(fixed, data, ...) {
   })
   message("Model fitting completed.")
   
-  # --- Step 2: Calculate predicted probabilities manually ---
   message("Step 2/3: Calculating predicted probabilities manually...")
   
-  # Extract core components
   beta_coeffs <- clm_fit$beta
   alpha_coeffs <- clm_fit$alpha
   link_obj <- make.link(clm_fit$link)
   link_func_inv <- link_obj$linkinv
   
-  # Manual calculation
   X_matrix <- model.matrix(clm_fit$terms, data = clm_fit$model)
   X_covariates <- X_matrix[, -which(colnames(X_matrix) == "(Intercept)"), drop = FALSE]
   latent_predictor <- as.vector(X_covariates %*% beta_coeffs)
@@ -75,25 +70,19 @@ fit_clm_for_staar <- function(fixed, data, ...) {
   pred_probs <- pred_probs / rowSums(pred_probs)
   message("Probability calculation completed.")
   
-  # --- Step 3: Assemble simplified STAAR "pseudo GLM" object ---
   message("Step 3/3: Assembling simplified STAAR null model...")
   
-  # Calculate mean and variance
   categories <- 1:K
   E_y <- as.vector(pred_probs %*% categories)
   E_y_squared <- as.vector(pred_probs %*% (categories^2))
   Var_y <- E_y_squared - (E_y^2)
   
-  # Calculate residuals and weights
   y_factor <- clm_fit$y
   y_numeric <- as.numeric(y_factor)
   residuals <- y_numeric - E_y
   weights <- 1 / (Var_y + 1e-8)
   
-  # Assemble components
   staar_null_obj <- list()
-  
-  # STAAR requires these components explicitly
   staar_null_obj$y <- y_numeric
   staar_null_obj$fitted.values <- E_y
   staar_null_obj$weights <- weights
@@ -103,7 +92,6 @@ fit_clm_for_staar <- function(fixed, data, ...) {
   staar_null_obj$terms <- clm_fit$terms
   staar_null_obj$model <- clm_fit$model
   
-  # Mask as glm object to handle with model.matrix etc.
   class(staar_null_obj) <- c("glm", "lm")
   
   message("Simplified STAAR null model created successfully.")
