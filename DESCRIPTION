@@ -11,3 +11,5 @@ RoxygenNote: 7.3.2
 Imports: 
     ordinal,
     stats
+URL: https://github.com/guanyy0225/ordinalSTAAR
+BugReports: https://github.com/guanyy0225/ordinalSTAAR/issues
