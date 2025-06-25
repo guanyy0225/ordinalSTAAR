@@ -2,26 +2,33 @@
 % Please edit documentation in R/fit_staar_null_model.R
 \name{fit_staar_null_model}
 \alias{fit_staar_null_model}
-\title{#' Fit a Null Model for STAAR, with Support for Ordinal Outcomes}
+\title{Fit STAAR Null Model}
 \usage{
 fit_staar_null_model(fixed, data, family = binomial(link = "logit"), ...)
 }
 \arguments{
-\item{fixed}{A formula specifying the null model.}
+\item{fixed}{A formula specifying the model equation.}
 
-\item{data}{A data frame containing all variables in the formula.}
+\item{data}{A data frame containing variables in the model.}
 
-\item{family}{The model family. Use standard \code{glm} families like \code{binomial()} or
-\code{gaussian()}, or use the special string \code{"ordinal"} for proportional odds models.}
+\item{family}{Either "ordinal" (character) for ordinal cumulative link models,
+or a family object (e.g. binomial, gaussian) for GLMs. Default is binomial(logit).}
 
-\item{...}{Additional arguments passed to \code{ordinal::clm()} or \code{stats::glm()}.}
+\item{...}{Additional arguments passed to the underlying fitting functions (clm or glm).}
 }
 \value{
-A STAAR-compatible null model object.
+An object of class "glm" (or a pseudo-GLM object) containing the fitted null model,
+suitable for use in STAAR analysis pipelines.
 }
 \description{
-This function provides a unified interface to fit null models for the STAAR
-package. It handles standard GLMs for binary/continuous traits and correctly
-fits and converts ordinal regression models (proportional odds models) for
-use with STAAR.
+This function fits a simplified null model for STAAR analysis. Depending on the
+specified family, it fits either:
+\itemize{
+\item an ordinal cumulative link model (clm) when family = "ordinal", or
+\item a generalized linear model (glm) for other families such as binomial or gaussian.
+}
+}
+\details{
+For ordinal models, predicted probabilities and weights are calculated manually,
+and a pseudo-GLM object is assembled for compatibility with downstream STAAR functions.
 }
