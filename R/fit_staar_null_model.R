@@ -1,5 +1,6 @@
-#' Fit STAAR Null Model
-#'
+# =============================================================================
+# Functions for Ordinal STAAR Analysis
+# =============================================================================
 #' This function fits a simplified null model for STAAR analysis. Depending on the
 #' specified family, it fits either:
 #' \itemize{
@@ -52,7 +53,8 @@ fit_clm_for_staar <- function(fixed, data, ...) {
   link_func_inv <- link_obj$linkinv
   
   X_matrix <- model.matrix(clm_fit$terms, data = clm_fit$model)
-  X_covariates <- X_matrix[, -which(colnames(X_matrix) == "(Intercept)"), drop = FALSE]
+  covariate_names <- names(beta_coeffs)
+  X_covariates <- X_matrix[, covariate_names, drop = FALSE]
   latent_predictor <- as.vector(X_covariates %*% beta_coeffs)
   
   cum_probs_list <- lapply(alpha_coeffs, function(a) {
@@ -87,13 +89,26 @@ fit_clm_for_staar <- function(fixed, data, ...) {
   staar_null_obj$fitted.values <- E_y
   staar_null_obj$weights <- weights
   staar_null_obj$family <- gaussian(link = "identity")
-  staar_null_obj$summary <- list(dispersion = 1.0)
+  
+  staar_null_obj$dispersion <- 1.0 
+  staar_null_obj$df.residual <- clm_fit$df.residual
+  staar_null_obj$residuals <- residuals
+  staar_null_obj$df.null <- length(y_numeric) - 1
+  staar_null_obj$deviance <- sum(weights * (residuals^2))
+  staar_null_obj$coefficients <- clm_fit$coefficients # 最好也加上这个
+  
   staar_null_obj$relatedness <- FALSE
   staar_null_obj$terms <- clm_fit$terms
   staar_null_obj$model <- clm_fit$model
   
-  class(staar_null_obj) <- c("glm", "lm")
+  class(staar_null_obj) <- c("POM", "glm", "lm")
   
   message("Simplified STAAR null model created successfully.")
   return(staar_null_obj)
+}
+
+# This S3 method provides a minimal summary object for our custom "POM" class.
+# It ensures compatibility with functions that expect a summary from a glm object.
+summary.POM <- function(object, ...) {
+  list(dispersion = object$dispersion)
 }
