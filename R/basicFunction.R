@@ -1,20 +1,42 @@
-#' @title 为有序模型计算得分统计量 (与SurvSTAAR格式对齐)
+#' @title Calculate Score Statistics for an Ordinal Model (Final Robust Version)
+#' @description This function calculates score statistics for single variants and is the core
+#'   computational engine for set-based tests. It includes robust handling of potentially
+#'   singular covariance matrices.
 #' @keywords internal
 Ordinal_exactScore <- function(objNull, G_mat, use_SPA = NULL, SPA_filter = TRUE, SPA_filter_cutoff = 0.05, verbose = FALSE) {
 
-  Score <- as.vector(crossprod(G_mat, objNull$residuals))
+  # Calculate the score vector U = G' * W * residuals
+  Score <- as.vector(crossprod(G_mat, objNull$W_mat %*% objNull$residuals))
 
+  # Calculate the main components of the variance-covariance matrix V
   G_prime_W_G <- crossprod(G_mat, objNull$W_mat %*% G_mat)
   G_prime_W_X <- crossprod(G_mat, objNull$WX_mat)
   Correction_Term <- G_prime_W_X %*% objNull$XWX_inv %*% t(G_prime_W_X)
   Var_mat <- G_prime_W_G - Correction_Term
 
+  # --- [CRITICAL FIX] ---
+  # Regularize the covariance matrix by adding a small positive value ("nugget")
+  # to its diagonal. This ensures the matrix is strictly positive-definite and
+  # prevents the variance of aggregate tests (like Burden) from collapsing to zero
+  # due to high correlation/collinearity between variants.
+  diag(Var_mat) <- diag(Var_mat) + 1e-6
+  # --- [END OF FIX] ---
+
+  # Extract the diagonal elements for single-variant tests
   Variance <- diag(Var_mat)
+
+  # A secondary safeguard to ensure no individual variance is zero or negative
+  # This is somewhat redundant after the nugget fix but kept for extra safety.
+  Variance[Variance <= 1e-8] <- 1e-8
+
+  # Calculate single-variant score test statistics and p-values
   Stest <- Score^2 / Variance
   p_value <- pchisq(Stest, df = 1, lower.tail = FALSE)
 
+  # Assemble the results data frame
   result_df <- data.frame(Score = Score, Variance = Variance, Stest = Stest, Pvalue = p_value)
 
+  # --- Saddlepoint Approximation (SPA) Section ---
   if (is.null(use_SPA)) use_SPA <- objNull$use_SPA
 
   if (use_SPA) {
@@ -27,12 +49,14 @@ Ordinal_exactScore <- function(objNull, G_mat, use_SPA = NULL, SPA_filter = TRUE
       G_tilde <- G_tilde_forSPA_Ordinal(G_mat, objNull)
 
       p_spa_values <- sapply(SPA_index, function(i) {
+        # Pass the robust variance to the SPA function
         single_SPA_Ordinal(G_tilde[, i], Score[i], Variance[i], objNull)
       })
       result_df$Pvalue_SPA[SPA_index] <- p_spa_values
     }
   }
 
+  # --- Final Formatting Section ---
   Est <- result_df$Score / result_df$Variance
   Est_se <- 1 / sqrt(result_df$Variance)
 
@@ -46,65 +70,13 @@ Ordinal_exactScore <- function(objNull, G_mat, use_SPA = NULL, SPA_filter = TRUE
   result_df$Est <- Est
   result_df$Est_se <- Est_se
 
+  # Return all necessary components for downstream aggregate tests
   results <- list(result = result_df, Score = Score, Covariance = Var_mat)
   return(results)
 }
 
 
 
-
-
-
-#' @title 为 OrdinalSTAAR 计算经过协变量校正的基因型 (G_tilde)
-#' @description 本函数计算在有序 Probit 零模型下，经过协变量校正后的基因型
-#'   矩阵 G_tilde。它使用了加权最小二乘法的投影，其组件已在 Ordinal_NullModel
-#'   中预先计算好。
-#'
-#' @param G 一个 n x p 的基因型矩阵 (n=样本数, p=变异数)。
-#' @param objNull 从 `Ordinal_NullModel` 返回的零模型对象，必须包含
-#'   `X_mat`, `W_mat`, `XWX_inv` 等组件。
-#'
-#' @return 一个 n x p 的、经过协变量校正的基因型矩阵 G_tilde。
-#'
-G_tilde_forSPA_Ordinal <- function(G, objNull) {
-
-  # --- 1. 输入验证 ---
-  required_components <- c("X_mat", "W_mat", "XWX_inv")
-  if (!all(required_components %in% names(objNull))) {
-    stop("The null model object 'objNull' is missing required components for G_tilde calculation (X_mat, W_mat, XWX_inv).")
-  }
-
-  # 确保 G 是一个标准的 matrix，以避免稀疏矩阵的兼容性问题
-  if (inherits(G, "sparseMatrix")) {
-    G <- as.matrix(G)
-  }
-
-  # --- 2. 从 objNull 中解包预计算的矩阵 ---
-  X <- objNull$X_mat         # n x k 设计矩阵
-  W <- objNull$W_mat         # n x n 对角权重矩阵
-  XWX_inv <- objNull$XWX_inv  # k x k 的 (X'WX)^-1 矩阵
-
-  # --- 3. 执行加权投影的矩阵代数运算 ---
-
-  # 计算 X'WG
-  # X is (n x k), W is (n x n), G is (n x p)
-  # t(X) is (k x n)
-  # W %*% G is (n x p)
-  # t(X) %*% (W %*% G) gives a (k x p) matrix
-  X_t_W_G <- crossprod(X, W %*% G)
-
-  # 计算 X * (X'WX)^-1 * (X'WG)
-  # X is (n x k)
-  # XWX_inv is (k x k)
-  # X_t_W_G is (k x p)
-  # The result is an (n x p) matrix, representing the projected part of G
-  G_projected <- X %*% (XWX_inv %*% X_t_W_G)
-
-  # --- 4. 计算 G_tilde = G - G_projected ---
-  G_tilde <- G - G_projected
-
-  return(G_tilde)
-}
 
 
 genoMatrixPlink = function(Geno, bim_data = bim_data, markerIndex,
@@ -476,13 +448,58 @@ CGF4LatentRes <- function(fit_null, range = c(-100, 100), length.out = 1e4, verb
 
 
 
+
+#' @title 为 OrdinalSTAAR 计算经过协变量校正的基因型 (G_tilde)
+#' @description 本函数计算在有序 Probit 零模型下，经过协变量校正后的基因型
+#'   矩阵 G_tilde。它使用了加权最小二乘法的投影，其组件已在 Ordinal_NullModel
+#'   中预先计算好。
+#'
+#' @param G 一个 n x p 的基因型矩阵 (n=样本数, p=变异数)。
+#' @param objNull 从 `Ordinal_NullModel` 返回的零模型对象，必须包含
+#'   `X_mat`, `W_mat`, `XWX_inv` 等组件。
+#'
+#' @return 一个 n x p 的、经过协变量校正的基因型矩阵 G_tilde。
+#'
 G_tilde_forSPA_Ordinal <- function(G, objNull) {
-  if (inherits(G, "sparseMatrix")) G <- as.matrix(G)
-  X_t_W_G <- crossprod(objNull$X_mat, objNull$W_mat %*% G)
-  G_projected <- objNull$X_mat %*% (objNull$XWX_inv %*% X_t_W_G)
+
+  # --- 1. 输入验证 ---
+  required_components <- c("X_mat", "W_mat", "XWX_inv")
+  if (!all(required_components %in% names(objNull))) {
+    stop("The null model object 'objNull' is missing required components for G_tilde calculation (X_mat, W_mat, XWX_inv).")
+  }
+
+  # 确保 G 是一个标准的 matrix，以避免稀疏矩阵的兼容性问题
+  if (inherits(G, "sparseMatrix")) {
+    G <- as.matrix(G)
+  }
+
+  # --- 2. 从 objNull 中解包预计算的矩阵 ---
+  X <- objNull$X_mat         # n x k 设计矩阵
+  W <- objNull$W_mat         # n x n 对角权重矩阵
+  XWX_inv <- objNull$XWX_inv  # k x k 的 (X'WX)^-1 矩阵
+
+  # --- 3. 执行加权投影的矩阵代数运算 ---
+
+  # 计算 X'WG
+  # X is (n x k), W is (n x n), G is (n x p)
+  # t(X) is (k x n)
+  # W %*% G is (n x p)
+  # t(X) %*% (W %*% G) gives a (k x p) matrix
+  X_t_W_G <- crossprod(X, W %*% G)
+
+  # 计算 X * (X'WX)^-1 * (X'WG)
+  # X is (n x k)
+  # XWX_inv is (k x k)
+  # X_t_W_G is (k x p)
+  # The result is an (n x p) matrix, representing the projected part of G
+  G_projected <- X %*% (XWX_inv %*% X_t_W_G)
+
+  # --- 4. 计算 G_tilde = G - G_projected ---
   G_tilde <- G - G_projected
+
   return(G_tilde)
 }
+
 
 
 
@@ -608,7 +625,7 @@ single_SPA_Ordinal <- function(G_w, Score, Variance, objNull) {
 
 
 
-#' @title 有序模型的 Burden 检验 (支持SPA)
+#' @title 有序模型的 Burden 检验 (支持SPA, 修正版)
 #' @keywords internal
 OrdinalBurden <- function(Geno, Score, Covariance, weight, objNull, use_SPA = NULL, SPA_filter = TRUE, SPA_filter_cutoff = 0.05, verbose = FALSE) {
 
@@ -621,10 +638,19 @@ OrdinalBurden <- function(Geno, Score, Covariance, weight, objNull, use_SPA = NU
     weight_k <- weight[, k]
     Score_k <- sum(Score * weight_k)
     Variance_k <- as.vector(t(weight_k) %*% Covariance %*% weight_k)
+
+    # --- [关键修正] ---
+    # 添加保护，防止方差为0或负数
+    if (Variance_k <= 1e-8) {
+      Variance_k <- 1e-8
+    }
+    # --- [修正结束] ---
+
     pval_k <- pchisq(Score_k^2 / Variance_k, df = 1, lower.tail = FALSE)
 
     if (use_SPA && (!SPA_filter || (SPA_filter && pval_k < SPA_filter_cutoff))) {
       G_tilde_w_k <- G_tilde %*% weight_k
+      # 注意：传递给SPA的方差也应该是修正后的
       pval_k <- single_SPA_Ordinal(G_tilde_w_k, Score_k, Variance_k, objNull)
     }
 
@@ -633,63 +659,6 @@ OrdinalBurden <- function(Geno, Score, Covariance, weight, objNull, use_SPA = NU
 
   return(matrix(pval_B, nrow = 2, byrow = TRUE))
 }
-
-
-
-OrdinalACAT <- function(Geno, Score, Covariance, Pvalue, MAC = NULL, weight_A, weight_B,
-                        objNull, combine_ultra_rare = TRUE, ultra_rare_mac_cutoff = 20, verbose = FALSE) {
-
-  if (!inherits(Geno, c("matrix", "Matrix"))) stop("基因型必须是一个矩阵！")
-  if (is.null(MAC)) MAC <- colSums(Geno)
-
-  ultra_rare_index <- which(MAC <= ultra_rare_mac_cutoff)
-  pval_A <- NULL
-
-  # 策略1：不合并，或超稀有变异太少
-  if (!combine_ultra_rare || length(ultra_rare_index) <= 1) {
-    if (verbose) print("             在ACAT检验中应用标准柯西组合")
-    for (k in 1:ncol(weight_A)) {
-      pval_k <- CCT(Pvalue, weight_A[, k])
-      pval_A <- c(pval_A, pval_k)
-    }
-    # 策略2：所有变异都是超稀有 -> 直接退化为Burden检验
-  } else if (length(ultra_rare_index) == ncol(Geno)) {
-    if (verbose) print("             所有变异均为超稀有，ACAT退化为Burden检验")
-    pval_A <- OrdinalBurden(Geno, Score, Covariance, weight_B, objNull,
-                            use_SPA, SPA_filter, SPA_filter_cutoff, verbose = FALSE)
-    # 策略3：混合情况 -> 合并超稀有变异
-  } else {
-    if (verbose) print(paste0("             在ACAT检验中合并 ", length(ultra_rare_index), " 个超稀有变异"))
-
-    # 1. 对超稀有变异子集做Burden检验
-    G_ultra_rare <- Geno[, ultra_rare_index, drop = FALSE]
-    Score_rare <- Score[ultra_rare_index]
-    Covariance_rare <- Covariance[ultra_rare_index, ultra_rare_index, drop = FALSE]
-    weight_B_rare <- weight_B[ultra_rare_index, , drop = FALSE]
-
-    Pval_rare_B <- OrdinalBurden(G_ultra_rare, Score = Score_rare, Covariance = Covariance_rare,
-                                 weight = weight_B_rare, objNull = objNull, verbose = FALSE)
-
-    # 2. 准备组合检验的输入
-    Pvalue_sub <- Pvalue[-ultra_rare_index]
-    # 对权重进行调整：超稀有变异的权重合并为1个，其余不变
-    weight_A_new <- rbind(colMeans(weight_A[ultra_rare_index, , drop = FALSE]), weight_A[-ultra_rare_index, , drop = FALSE])
-
-    for (k in 1:ncol(weight_A_new)) {
-      # 将Burden p值和剩余p值打包
-      Pvalue_k <- c(Pval_rare_B[k], Pvalue_sub)
-      weight_k <- weight_A_new[, k]
-
-      pval_k <- CCT(Pvalue_k, weight_k)
-      pval_A <- c(pval_A, pval_k)
-    }
-  }
-
-  pval_A <- matrix(pval_A, nrow = 2, byrow = TRUE)
-  return(pval_A)
-}
-
-
 
 
 #' @title 有序模型的 SKAT (与SurvSTAAR完全兼容版, 逻辑重构)
@@ -786,6 +755,61 @@ OrdinalSKAT <- function(Geno, Score, Covariance, Pvalue, MAC = NULL, weight_S, w
   return(pval_S)
 }
 
+OrdinalACAT <- function(Geno, Score, Covariance, Pvalue, MAC = NULL,use_SPA = NULL, weight_A, weight_B,
+                        objNull, combine_ultra_rare = TRUE, ultra_rare_mac_cutoff = 20, verbose = FALSE) {
+
+  if (!inherits(Geno, c("matrix", "Matrix"))) stop("基因型必须是一个矩阵！")
+  if (is.null(MAC)) MAC <- colSums(Geno)
+
+  ultra_rare_index <- which(MAC <= ultra_rare_mac_cutoff)
+  pval_A <- NULL
+
+  # 策略1：不合并，或超稀有变异太少
+  if (!combine_ultra_rare || length(ultra_rare_index) <= 1) {
+    if (verbose) print("             在ACAT检验中应用标准柯西组合")
+    for (k in 1:ncol(weight_A)) {
+      pval_k <- CCT(Pvalue, weight_A[, k])
+      pval_A <- c(pval_A, pval_k)
+    }
+    # 策略2：所有变异都是超稀有 -> 直接退化为Burden检验
+  } else if (length(ultra_rare_index) == ncol(Geno)) {
+    if (verbose) print("             所有变异均为超稀有，ACAT退化为Burden检验")
+    pval_A <- OrdinalBurden(Geno, Score, Covariance, weight_B, objNull,
+                            use_SPA, SPA_filter, SPA_filter_cutoff, verbose = FALSE)
+    # 策略3：混合情况 -> 合并超稀有变异
+  } else {
+    if (verbose) print(paste0("             在ACAT检验中合并 ", length(ultra_rare_index), " 个超稀有变异"))
+
+    # 1. 对超稀有变异子集做Burden检验
+    G_ultra_rare <- Geno[, ultra_rare_index, drop = FALSE]
+    Score_rare <- Score[ultra_rare_index]
+    Covariance_rare <- Covariance[ultra_rare_index, ultra_rare_index, drop = FALSE]
+    weight_B_rare <- weight_B[ultra_rare_index, , drop = FALSE]
+
+    Pval_rare_B <- OrdinalBurden(G_ultra_rare, Score = Score_rare, Covariance = Covariance_rare,
+                                 weight = weight_B_rare, objNull = objNull, verbose = FALSE)
+
+    # 2. 准备组合检验的输入
+    Pvalue_sub <- Pvalue[-ultra_rare_index]
+    # 对权重进行调整：超稀有变异的权重合并为1个，其余不变
+    weight_A_new <- rbind(colMeans(weight_A[ultra_rare_index, , drop = FALSE]), weight_A[-ultra_rare_index, , drop = FALSE])
+
+    for (k in 1:ncol(weight_A_new)) {
+      # 将Burden p值和剩余p值打包
+      Pvalue_k <- c(Pval_rare_B[k], Pvalue_sub)
+      weight_k <- weight_A_new[, k]
+
+      pval_k <- CCT(Pvalue_k, weight_k)
+      pval_A <- c(pval_A, pval_k)
+    }
+  }
+
+  pval_A <- matrix(pval_A, nrow = 2, byrow = TRUE)
+  return(pval_A)
+}
+
+
+
 
 OrdinalSTAAR_O = function(Geno, objNull, annotation_rank = NULL, MAC = NULL,
                        use_SPA = NULL, SPA_filter = TRUE, SPA_filter_cutoff = 0.05,
@@ -847,8 +871,8 @@ OrdinalSTAAR_O = function(Geno, objNull, annotation_rank = NULL, MAC = NULL,
   STAAR_B_1_25 = CCT(Pvalue_B[1, ])
   STAAR_B_1_1  = CCT(Pvalue_B[2, ])
 
-  results_OrdinalSTAAR = c(STAAR_S_1_25, STAAR_S_1_1, STAAR_A_1_25, STAAR_A_1_1, STAAR_B_1_25, STAAR_B_1_1)
-  results_pvalue = cbind(results_pvalue, results_OrdinalSTAAR)
+  Combined_P = c(STAAR_S_1_25, STAAR_S_1_1, STAAR_A_1_25, STAAR_A_1_1, STAAR_B_1_25, STAAR_B_1_1)
+  results_pvalue = cbind(results_pvalue, Combined_P)
 
 
   results = list("OrdinalSTAAR_O" = results_STAAR_O,
@@ -861,6 +885,8 @@ OrdinalSTAAR_O = function(Geno, objNull, annotation_rank = NULL, MAC = NULL,
 
   return(results)
 }
+
+
 
 
 
