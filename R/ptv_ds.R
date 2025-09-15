@@ -125,7 +125,6 @@ Ordinal_ptv_ds <- function(gene_name, genofile, objNull, genes_info, variant_typ
     Anno.Int.PHRED.sub = Anno.Int.PHRED.sub[getGeno$include_index, , drop = FALSE]
   }
 
-  # --- [THE FIX: Robustly handle NA in ANY annotation column] ---
   if (!is.null(Anno.Int.PHRED.sub)) {
     complete_anno_idx <- complete.cases(Anno.Int.PHRED.sub)
     if (sum(!complete_anno_idx) > 0) {
@@ -136,7 +135,6 @@ Ordinal_ptv_ds <- function(gene_name, genofile, objNull, genes_info, variant_typ
       Anno.Int.PHRED.sub <- Anno.Int.PHRED.sub[complete_anno_idx, , drop = FALSE]
     }
   }
-  # --- [END OF FIX] ---
 
   if (is.null(dim(Geno)) || ncol(Geno) < rare_num_cutoff) {
     message("After all filtering, variants number of *ptv_ds* is less than ", rare_num_cutoff, ", skipping...")

@@ -82,7 +82,6 @@ Ordinal_missense <- function(gene_name, genofile, objNull, genes_info, variant_t
       return(list("OrdinalSTAAR_O" = NA))
     }
 
-    # --- Robustness Check (now on NA-free data) ---
     message(paste0("Performing pre-check for numerically unstable variants in *", sub_category_name, "*..."))
     pre_check_stats <- Ordinal_exactScore(objNull = objNull, G_mat = Geno, use_SPA = FALSE)
 
@@ -120,8 +119,6 @@ Ordinal_missense <- function(gene_name, genofile, objNull, genes_info, variant_t
 
     return(final_result)
   }
-  # --- [END OF INTERNAL HELPER FUNCTION] ---
-
 
   # --- Part 1: Initial Variant Selection ---
   phenotype.id = objNull$sample_ids
